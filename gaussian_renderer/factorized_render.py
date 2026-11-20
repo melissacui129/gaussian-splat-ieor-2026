@@ -93,7 +93,7 @@ def render_factorized(
     bg_color: torch.Tensor,
     num_samples: int = 64,
     ray_indices: torch.Tensor = None,
-    chunk_size: int = 8192,
+    chunk_size: int = 256,
 ):
     """
     Factorized-Gaussian replacement for Kerbl's render() function.

@@ -20,12 +20,12 @@ class FactorizedGaussianModel(nn.Module):
         self.num_primitives = num_primitives
 
         # 1. 2D Gaussian parameters: mean mu_i in R^2, [log-scales (s_x, s_y), angle theta] for covariance matrix Sigma
-        self._xy = nn.Parameter(torch.empty(num_primitives, 2).uniform_(-1.5, 1.5)) # initial primitive spread
-        self._scaling = nn.Parameter(torch.full((num_primitives, 2), -3.0))
+        self._xy = nn.Parameter(torch.empty(num_primitives, 2).uniform_(-1.0, 1.0))
+        self._scaling = nn.Parameter(torch.full((num_primitives, 2), -2.8))
         self._theta = nn.Parameter(torch.zeros(num_primitives, 1))
 
         # 2. Appearance parameters: opacity alpha_i and RGB color c_i
-        self._opacity = nn.Parameter(torch.full((num_primitives, 1), 0.5))
+        self._opacity = nn.Parameter(torch.full((num_primitives, 1), 0.0))
         self._rgb = nn.Parameter(torch.zeros(num_primitives, 3))
 
         # 3. Per-primitive attention module p_z(z | x, y)
@@ -96,7 +96,7 @@ class FactorizedGaussianModel(nn.Module):
 
         # 3. sigma_i(x, y, z_m) = alpha_i * p_2D^i * p_z^i -> (N, R, M)
         alpha = self.get_opacity.unsqueeze(-1)  # (N, 1, 1)
-        sigma_i = alpha * p_2d * p_z
+        sigma_i = alpha * M * p_2d * p_z
 
         # 4. Sum over all N primitives at each depth slice -> (R, M, 1)
         sigma_total = torch.sum(sigma_i, dim=0).unsqueeze(-1)
