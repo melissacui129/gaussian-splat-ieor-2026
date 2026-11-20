@@ -21,11 +21,11 @@ class FactorizedGaussianModel(nn.Module):
 
         # 1. 2D Gaussian parameters: mean mu_i in R^2, [log-scales (s_x, s_y), angle theta] for covariance matrix Sigma
         self._xy = nn.Parameter(torch.empty(num_primitives, 2).uniform_(-1.5, 1.5)) # initial primitive spread
-        self._scaling = nn.Parameter(torch.full((num_primitives, 2), -1.5))
+        self._scaling = nn.Parameter(torch.full((num_primitives, 2), -3.0))
         self._theta = nn.Parameter(torch.zeros(num_primitives, 1))
 
         # 2. Appearance parameters: opacity alpha_i and RGB color c_i
-        self._opacity = nn.Parameter(torch.full((num_primitives, 1), -2.2)) # initialize opacity at 0.1; sigmoid^-1(p), p = 0.1 ~ -2.2
+        self._opacity = nn.Parameter(torch.full((num_primitives, 1), 0.5))
         self._rgb = nn.Parameter(torch.zeros(num_primitives, 3))
 
         # 3. Per-primitive attention module p_z(z | x, y)
