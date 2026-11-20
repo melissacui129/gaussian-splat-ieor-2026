@@ -56,12 +56,12 @@ class Attention(nn.Module):
         for _ in range(math.ceil(r / d)):
             q, _ = torch.linalg.qr(torch.randn(d, d)) # generates d x d orthogonal matrix
             norms = torch.linalg.norm(torch.randn(d, d), dim=1, keepdim=True)
-            blocks.append(q * norms) # Choromanski et al., Equation (7) / Lemma 1 - ensures distribution ~ N(0, I_d)
+            blocks.append(q * norms)
         return torch.cat(blocks, dim=0)[:r]  # (r, d)
 
     def _favor_plus_features(self, v: torch.Tensor) -> torch.Tensor:
         """
-        Equation (8) feature map:
+        Feature map:
         phi(v) = exp(-||v||^2 / 2) / sqrt(r) * exp(Omega @ v)
         v: (N, B, d_qk) -> returns (N, B, r)
         """
@@ -87,11 +87,11 @@ class Attention(nn.Module):
         k = self.k_net(z).reshape(self.num_primitives, R, M, self.d_qk)
 
         if self.mode == "exact":
-            # Equation (4): dot product q(x,y)^T k(z_m) at each sample, softmax over M
+            # Dot product q(x,y)^T k(z_m) at each sample, softmax over M
             logits = torch.sum(q * k, dim=-1)  # (N, R, M)
             p_z = torch.softmax(logits, dim=-1)
         else:
-            # Equation (8): Performer positive random features
+            # Performer positive random features
             phi_q = self._favor_plus_features(q.reshape(self.num_primitives, B, self.d_qk))
             phi_k = self._favor_plus_features(k.reshape(self.num_primitives, B, self.d_qk))
 

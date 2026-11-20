@@ -43,7 +43,7 @@ class FactorizedGaussianModel(nn.Module):
 
     @property
     def get_scaling(self) -> torch.Tensor:
-        return torch.exp(self._scaling)
+        return torch.exp(self._scaling) # ensures radius stays positive; Kerbl uses log logic in line 40 of gaussian_model.py
 
     @property
     def get_opacity(self) -> torch.Tensor:
@@ -55,7 +55,7 @@ class FactorizedGaussianModel(nn.Module):
 
     def evaluate_2d_gaussian(self, xy: torch.Tensor) -> torch.Tensor:
         """
-        Equation (3): unnormalized 2D Gaussian
+        Evaluate unnormalized 2D Gaussian
         p_2D^i(x, y) = exp(-0.5 * (u - mu_i)^T Sigma_i^{-1} (u - mu_i))
         xy: (B, 2) -> returns (N, B)
         """
@@ -72,9 +72,6 @@ class FactorizedGaussianModel(nn.Module):
         local_x = cos_t * dx + sin_t * dy
         local_y = -sin_t * dx + cos_t * dy
 
-        # Divide by scales (s_x, s_y) -> equivalent to multiplying by Sigma_i^{-1}
-        # Sigma_i = rotation(theta) [[s_x^2, 0], [0, s_y^2]] rotation (theta)^T
-        # Sigma_i^-1 = rotation(theta) [[1/s_x^2, 0], [0, 1/s_y^2]] rotation (theta)^T
         scales = self.get_scaling + 1e-6  # (N, 2)
         p2d_term = (local_x / scales[:, 0:1]) ** 2 + (local_y / scales[:, 1:2]) ** 2
 
@@ -97,11 +94,11 @@ class FactorizedGaussianModel(nn.Module):
         # 2. p_z^i(z_m | x, y) -> shape (N, R, M)
         p_z = self.depth_attention(pts)
 
-        # 3. Equation (5): sigma_i(x, y, z_m) = alpha_i * p_2D^i * p_z^i -> (N, R, M)
+        # 3. sigma_i(x, y, z_m) = alpha_i * p_2D^i * p_z^i -> (N, R, M)
         alpha = self.get_opacity.unsqueeze(-1)  # (N, 1, 1)
         sigma_i = alpha * p_2d * p_z
 
-        # 4. Equation (6): sum over all N primitives at each depth slice -> (R, M, 1)
+        # 4. Sum over all N primitives at each depth slice -> (R, M, 1)
         sigma_total = torch.sum(sigma_i, dim=0).unsqueeze(-1)
 
         # 5. Weighted average color C(x, y, z_m) -> (R, M, 3)
@@ -109,3 +106,13 @@ class FactorizedGaussianModel(nn.Module):
         color_weighted = torch.einsum("nrm,nc->rmc", sigma_i, rgb) / (sigma_total + 1e-8)
 
         return sigma_total, color_weighted
+    
+    def get_stats(self):
+        """Returns counts of total splats, non-transparent (active) splats, and total parameters."""
+        active_splats = int((self.get_opacity > 0.01).sum().item())
+        total_params = sum(p.numel() for p in self.parameters()) # e.g., (x, y), theta, w1, b1, etc. & number of elements inside trainable param tensors
+        return {
+            "total_splats": self._xy.shape[0], 
+            "active_splats": active_splats, 
+            "total_params": total_params
+        }
