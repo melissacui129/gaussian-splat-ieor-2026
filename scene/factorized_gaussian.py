@@ -78,7 +78,7 @@ class FactorizedGaussianModel(nn.Module):
         local_x = cos_t * dx + sin_t * dy
         local_y = -sin_t * dx + cos_t * dy
 
-        scales = torch.exp(torch.clamp(self._scaling, min=-8.0, max=2.0))  # (N, 2)
+        scales = self.get_scaling + 1e-6  # (N, 2)
         p2d_term = (local_x / scales[:, 0:1]) ** 2 + (local_y / scales[:, 1:2]) ** 2
 
         return torch.exp(-0.5 * p2d_term)  # (N, B)
@@ -91,23 +91,69 @@ class FactorizedGaussianModel(nn.Module):
             sigma_total: (R, M, 1) total density at each (x, y, z_m)
             color_weighted: (R, M, 3) density-weighted RGB C(x, y, z_m)
         """
-        with torch.amp.autocast("cuda", enabled=False):
-            pts = pts.float()
-            R, M, _ = pts.shape
-            xy_flat = pts[..., :2].reshape(R * M, 2)
+        # R, M, _ = pts.shape
+        # xy_flat = pts[..., :2].reshape(R * M, 2)
 
-            p_2d = self.evaluate_2d_gaussian(xy_flat).reshape(self.num_primitives, R, M)
-            p_z = self.depth_attention(pts)
+        # # 1. p_2D^i(x, y) -> shape (N, R, M)
+        # p_2d = self.evaluate_2d_gaussian(xy_flat).reshape(self.num_primitives, R, M)
 
-            alpha = self.get_opacity.unsqueeze(-1)
-            K = self.depth_attention.num_z_bins
-            sigma_i = alpha * K * p_2d * p_z
+        # # 2. p_z^i(z_m | x, y) -> shape (N, R, M)
+        # p_z = self.depth_attention(pts)
 
-            sigma_total = torch.sum(sigma_i, dim=0).unsqueeze(-1)
-            rgb = self.get_rgb
-            color_weighted = torch.einsum("nrm,nc->rmc", sigma_i, rgb) / (sigma_total + 1e-8)
+        # # # 3. sigma_i(x, y, z_m) = alpha_i * K * p_2D^i * p_z^i -> (N, R, M)
+        # # alpha = self.get_opacity.unsqueeze(-1)  # (N, 1, 1)
+        # # K = self.depth_attention.num_z_bins
+        # # sigma_i = alpha * K * p_2d * p_z
 
-            return sigma_total, color_weighted
+        # # 3. sigma_i(x, y, z_m) = alpha_i * (K / (z_max - z_min)) * p_2D^i * p_z^i
+        # alpha = self.get_opacity.unsqueeze(-1)  # (N, 1, 1)
+        # z_span = self.depth_attention.z_grid[-1, 0] - self.depth_attention.z_grid[0, 0]
+        # density_scale = self.depth_attention.num_z_bins / z_span
+        # sigma_i = alpha * density_scale * p_2d * p_z
+
+        # # 4. Sum over all N primitives at each depth slice -> (R, M, 1)
+        # sigma_total = torch.sum(sigma_i, dim=0).unsqueeze(-1)
+
+        # # 5. Weighted average color C(x, y, z_m) -> (R, M, 3)
+        # rgb = self.get_rgb  # (N, 3)
+        # color_weighted = torch.einsum("nrm,nc->rmc", sigma_i, rgb) / (sigma_total + 1e-8)
+
+        # return sigma_total, color_weighted
+
+        pts = pts.float()
+        R, M, _ = pts.shape
+        B = R * M
+        xy_flat = pts[..., :2].reshape(B, 2)
+
+        # 1. p_2D^i(x, y) -> shape (N, B)
+        p_2d_flat = self.evaluate_2d_gaussian(xy_flat)
+
+        # 2. Cull sample points where ALL primitives have p_2d <= 1e-3 (empty background space)
+        active_mask = (p_2d_flat > 1e-3).any(dim=0)  # (B,)
+        p_z_flat = torch.zeros_like(p_2d_flat)       # (N, B)
+
+        if active_mask.any():
+            pts_active = pts.reshape(B, 3)[active_mask].unsqueeze(1)  # (B_act, 1, 3)
+            p_z_active = self.depth_attention(pts_active).squeeze(-1) # (N, B_act)
+            p_z_flat[:, active_mask] = p_z_active
+
+        p_2d = p_2d_flat.reshape(self.num_primitives, R, M)
+        p_z = p_z_flat.reshape(self.num_primitives, R, M)
+
+        # 3. sigma_i(x, y, z_m) = alpha_i * (K / (z_max - z_min)) * p_2D^i * p_z^i
+        alpha = self.get_opacity.unsqueeze(-1)  # (N, 1, 1)
+        z_span = self.depth_attention.z_grid[-1, 0] - self.depth_attention.z_grid[0, 0]
+        density_scale = self.depth_attention.num_z_bins / z_span
+        sigma_i = alpha * density_scale * p_2d * p_z
+
+        # 4. Sum over all N primitives at each depth slice -> (R, M, 1)
+        sigma_total = torch.sum(sigma_i, dim=0).unsqueeze(-1)
+
+        # 5. Weighted average color C(x, y, z_m) -> (R, M, 3)
+        rgb = self.get_rgb  # (N, 3)
+        color_weighted = torch.einsum("nrm,nc->rmc", sigma_i, rgb) / (sigma_total + 1e-8)
+
+        return sigma_total, color_weighted
     
     def get_stats(self):
         """Returns counts of total splats, non-transparent (active) splats, and total parameters."""
