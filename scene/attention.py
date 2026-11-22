@@ -12,16 +12,6 @@ class BatchedMLP(nn.Module):
         self.w2 = nn.Parameter(torch.randn(num_primitives, hidden_dim, out_dim) * 0.1) # weights; shape: (N, hiden_dim, out_dim)
         self.b2 = nn.Parameter(torch.zeros(num_primitives, 1, out_dim)) # biases
 
-    # def forward(self, x: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     x: (B, in_dim) where B is total queried coordinates (e.g., R * M)
-    #     returns: (N, B, out_dim)
-    #     """
-    #     h = torch.einsum("bi,nih->nbh", x, self.w1) + self.b1 # (B, in_dim) x (N, in_dim, hidden_dim) -> (N, B, hidden_dim)
-    #     h = torch.tanh(h)
-    #     out = torch.einsum("nbh,nho->nbo", h, self.w2) + self.b2 # (N, B, hidden_dim) x (N, hidden_dim, out_dim) -> (N, B, out_dim)
-    #     return out
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         x: (B, in_dim) where B is total queried coordinates (e.g., R * M)
@@ -85,7 +75,6 @@ class Attention(nn.Module):
         """
         norm_sq = torch.sum(v ** 2, dim=-1, keepdim=True)  # (N, B, 1)
         proj = torch.matmul(v, self.omega.T)  # (N, B, r)
-        # proj = torch.einsum("rd,nbd->nbr", self.omega, v)  # (N, B, r)
         proj = torch.clamp(proj, max=20.0) # clamp to prevent overflow
         return torch.exp(proj - 0.5 * norm_sq) / math.sqrt(self.num_features)
 
@@ -101,7 +90,7 @@ class Attention(nn.Module):
         # Query q_i(x_m, y_m) and sample key k_i(z_m): shape (N, R*M, d_qk)
         q = self.q_net(xy)
         k_sample = self.k_net(z)
-        # k_grid = self.k_net(self.z_grid)  # (N, K, d_qk)
+        
         if self.training:
             self._cached_k_grid = None
             k_grid = self.k_net(self.z_grid)
