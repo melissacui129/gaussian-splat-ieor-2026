@@ -116,7 +116,7 @@ class FactorizedGaussianModel(nn.Module):
 
         # 5. Weighted average color C(x, y, z_m) -> (R, M, 3)
         rgb = self.get_rgb  # (N, 3)
-        color_weighted = torch.einsum("nrm,nc->rmc", sigma_i, rgb) / (sigma_total + 1e-8)
+        color_weighted = torch.matmul(sigma_i.permute(1, 2, 0), rgb) / (sigma_total + 1e-8)
 
         return sigma_total, color_weighted
     
