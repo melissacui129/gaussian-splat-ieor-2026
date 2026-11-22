@@ -100,16 +100,22 @@ class Attention(nn.Module):
             k_grid = self._cached_k_grid
 
         if self.mode == "exact":
-            num_logits = (q.float() * k_sample.float()).sum(dim=-1)          # (N, R*M)
-            denom_logits = torch.bmm(q.float(), k_grid.float().transpose(1, 2))  # (N, R*M, K)
+            num_logits = (q.float() * k_sample.float()).sum(dim=-1)               # (N, R*M)
+            denom_logits = torch.bmm(q.float(), k_grid.float().transpose(1, 2))   # (N, R*M, K)
+            log_denom = torch.logsumexp(denom_logits, dim=-1)                     # (N, R*M)
+            p_z = torch.exp(num_logits - log_denom).reshape(self.num_primitives, R, M)
 
-            max_logit = torch.maximum(
-                num_logits.unsqueeze(-1),
-                denom_logits.max(dim=-1, keepdim=True).values,
-            )
-            num = torch.exp(num_logits - max_logit.squeeze(-1))
-            denom = torch.exp(denom_logits - max_logit).sum(dim=-1) + 1e-8
-            p_z = (num / denom).reshape(self.num_primitives, R, M)
+        # if self.mode == "exact":
+        #     num_logits = (q.float() * k_sample.float()).sum(dim=-1)          # (N, R*M)
+        #     denom_logits = torch.bmm(q.float(), k_grid.float().transpose(1, 2))  # (N, R*M, K)
+
+        #     max_logit = torch.maximum(
+        #         num_logits.unsqueeze(-1),
+        #         denom_logits.max(dim=-1, keepdim=True).values,
+        #     )
+        #     num = torch.exp(num_logits - max_logit.squeeze(-1))
+        #     denom = torch.exp(denom_logits - max_logit).sum(dim=-1) + 1e-8
+        #     p_z = (num / denom).reshape(self.num_primitives, R, M)
 
         elif self.mode == "performer":
             phi_q = self._positive_random_features(q.float())               # (N, R*M, F)
