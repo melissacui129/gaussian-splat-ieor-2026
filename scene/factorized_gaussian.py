@@ -78,7 +78,7 @@ class FactorizedGaussianModel(nn.Module):
         local_x = cos_t * dx + sin_t * dy
         local_y = -sin_t * dx + cos_t * dy
 
-        scales = self.get_scaling + 1e-6  # (N, 2)
+        scales = torch.exp(torch.clamp(self._scaling, min=-8.0, max=2.0))  # (N, 2)
         p2d_term = (local_x / scales[:, 0:1]) ** 2 + (local_y / scales[:, 1:2]) ** 2
 
         return torch.exp(-0.5 * p2d_term)  # (N, B)
