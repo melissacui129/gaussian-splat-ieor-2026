@@ -102,9 +102,9 @@ class Attention(nn.Module):
             p_z = (num / denom).reshape(self.num_primitives, R, M)
 
         elif self.mode == "performer":
-            phi_q = self._favor_plus_features(q.float())               # (N, R*M, F)
-            phi_k_sample = self._favor_plus_features(k_sample.float()) # (N, R*M, F)
-            phi_k_grid = self._favor_plus_features(k_grid.float())     # (N, K, F)
+            phi_q = self._positive_random_features(q.float())               # (N, R*M, F)
+            phi_k_sample = self._positive_random_features(k_sample.float()) # (N, R*M, F)
+            phi_k_grid = self._positive_random_features(k_grid.float())     # (N, K, F)
 
             num = (phi_q * phi_k_sample).sum(dim=-1)                   # (N, R*M)
             k_grid_sum = phi_k_grid.sum(dim=1)                         # (N, F)
