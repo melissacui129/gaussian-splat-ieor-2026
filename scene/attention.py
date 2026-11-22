@@ -64,7 +64,7 @@ class Attention(nn.Module):
             blocks.append(q * norms)
         return torch.cat(blocks, dim=0)[:r]  # (r, d)
 
-    def _favor_plus_features(self, v: torch.Tensor) -> torch.Tensor:
+    def _positive_random_features(self, v: torch.Tensor) -> torch.Tensor:
         """
         Feature map:
         phi(v) = exp(-||v||^2 / 2) / sqrt(r) * exp(Omega @ v)
@@ -78,7 +78,7 @@ class Attention(nn.Module):
     def forward(self, pts: torch.Tensor) -> torch.Tensor:
         """
         pts: (R, M, 3) world coordinates (x, y, z_m) along R rays and M depth slices
-        returns p_z: (N, R, M) normalized depth attention weights summing to 1 over M
+        returns p_z: (N, R, M) normalized depth attention weights
         """
         R, M, _ = pts.shape
         xy = pts[..., :2].reshape(R * M, 2)
@@ -87,24 +87,27 @@ class Attention(nn.Module):
         # Query q_i(x_m, y_m) and sample key k_i(z_m): shape (N, R*M, d_qk)
         q = self.q_net(xy)
         k_sample = self.k_net(z)
-
-        k_grid = self.k_net(self.z_grid) # (N, K, d_qk)
+        k_grid = self.k_net(self.z_grid)  # (N, K, d_qk)
 
         if self.mode == "exact":
-            num_logits = (q * k_sample).sum(dim=-1)
-            denom_logits = torch.bmm(q, k_grid.transpose(1, 2))
-            max_logit = denom_logits.max(dim=-1, keepdim=True).values
+            num_logits = (q.float() * k_sample.float()).sum(dim=-1)          # (N, R*M)
+            denom_logits = torch.bmm(q.float(), k_grid.float().transpose(1, 2))  # (N, R*M, K)
+
+            max_logit = torch.maximum(
+                num_logits.unsqueeze(-1),
+                denom_logits.max(dim=-1, keepdim=True).values,
+            )
             num = torch.exp(num_logits - max_logit.squeeze(-1))
             denom = torch.exp(denom_logits - max_logit).sum(dim=-1) + 1e-8
             p_z = (num / denom).reshape(self.num_primitives, R, M)
 
         elif self.mode == "performer":
-            phi_q = self._positive_random_features(q)            # (N, R*M, F)
-            phi_k_sample = self._positive_random_features(k_sample)  # (N, R*M, F)
-            phi_k_grid = self._positive_random_features(k_grid)  # (N, K, F)
+            phi_q = self._favor_plus_features(q.float())               # (N, R*M, F)
+            phi_k_sample = self._favor_plus_features(k_sample.float()) # (N, R*M, F)
+            phi_k_grid = self._favor_plus_features(k_grid.float())     # (N, K, F)
 
-            num = (phi_q * phi_k_sample).sum(dim=-1)             # (N, R*M)
-            k_grid_sum = phi_k_grid.sum(dim=1)                   # (N, F)
+            num = (phi_q * phi_k_sample).sum(dim=-1)                   # (N, R*M)
+            k_grid_sum = phi_k_grid.sum(dim=1)                         # (N, F)
             denom = (phi_q * k_grid_sum.unsqueeze(1)).sum(dim=-1) + 1e-8
             p_z = (num / denom).reshape(self.num_primitives, R, M)
 
