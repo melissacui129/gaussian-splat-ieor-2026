@@ -15,6 +15,9 @@ class FactorizedGaussianModel(nn.Module):
         hidden_dim: int = 16,
         num_features: int = 32,
         attention_mode: str = "exact",
+        z_min: float = -1.5,
+        z_max: float = 1.5,
+        num_z_bins: int = 64,
     ):
         super().__init__()
         self.num_primitives = num_primitives
@@ -28,13 +31,16 @@ class FactorizedGaussianModel(nn.Module):
         self._opacity = nn.Parameter(torch.full((num_primitives, 1), 0.0))
         self._rgb = nn.Parameter(torch.zeros(num_primitives, 3))
 
-        # 3. Per-primitive attention module p_z(z | x, y)
+        # 3. Attention module p_z(z | x, y)
         self.depth_attention = Attention(
             num_primitives=num_primitives,
             d_qk=d_qk,
             hidden_dim=hidden_dim,
             num_features=num_features,
             mode=attention_mode,
+            z_min=z_min,
+            z_max=z_max,
+            num_z_bins=num_z_bins,
         )
 
     @property
@@ -94,9 +100,10 @@ class FactorizedGaussianModel(nn.Module):
         # 2. p_z^i(z_m | x, y) -> shape (N, R, M)
         p_z = self.depth_attention(pts)
 
-        # 3. sigma_i(x, y, z_m) = alpha_i * p_2D^i * p_z^i -> (N, R, M)
+        # 3. sigma_i(x, y, z_m) = alpha_i * K * p_2D^i * p_z^i -> (N, R, M)
         alpha = self.get_opacity.unsqueeze(-1)  # (N, 1, 1)
-        sigma_i = alpha * M * p_2d * p_z
+        K = self.depth_attention.num_z_bins
+        sigma_i = alpha * K * p_2d * p_z
 
         # 4. Sum over all N primitives at each depth slice -> (R, M, 1)
         sigma_total = torch.sum(sigma_i, dim=0).unsqueeze(-1)

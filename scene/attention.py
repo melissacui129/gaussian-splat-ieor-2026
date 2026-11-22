@@ -2,7 +2,6 @@ import math
 import torch
 import torch.nn as nn
 
-
 class BatchedMLP(nn.Module):
     """N independent lightweight MLPs evaluated in parallel"""
     def __init__(self, num_primitives: int, in_dim: int, hidden_dim: int, out_dim: int):
@@ -23,7 +22,6 @@ class BatchedMLP(nn.Module):
         out = torch.einsum("nbh,nho->nbo", h, self.w2) + self.b2 # (N, B, hidden_dim) x (N, hidden_dim, out_dim) -> (N, B, out_dim)
         return out
 
-
 class Attention(nn.Module):
     """
     Computes p_z(z_m | x, y) for N primitives across R rays and M depth slices.
@@ -35,6 +33,9 @@ class Attention(nn.Module):
         hidden_dim: int = 16,
         num_features: int = 32,
         mode: str = "exact",
+        z_min: float = -1.5,
+        z_max: float = 1.5,
+        num_z_bins: int = 64,
     ):
         super().__init__()
         assert mode in ("exact", "performer")
@@ -42,9 +43,13 @@ class Attention(nn.Module):
         self.d_qk = d_qk
         self.num_features = num_features
         self.mode = mode
+        self.num_z_bins = num_z_bins
 
         self.q_net = BatchedMLP(num_primitives, in_dim=2, hidden_dim=hidden_dim, out_dim=d_qk) # q_i(x, y): R^2 -> R^{d_QK}
         self.k_net = BatchedMLP(num_primitives, in_dim=1, hidden_dim=hidden_dim, out_dim=d_qk) # k_i(z): R -> R^{d_QK}
+
+        z_grid = torch.linspace(z_min, z_max, num_z_bins).unsqueeze(-1)  # (K, 1)
+        self.register_buffer("z_grid", z_grid)
 
         omega = self._create_projection_matrix(num_features, d_qk) # fixed projection matrix omega in R^{r x d_QK} for performer
         self.register_buffer("omega", omega)
@@ -76,34 +81,31 @@ class Attention(nn.Module):
         returns p_z: (N, R, M) normalized depth attention weights summing to 1 over M
         """
         R, M, _ = pts.shape
-        B = R * M
-        flat_pts = pts.reshape(B, 3)
+        xy = pts[..., :2].reshape(R * M, 2)
+        z = pts[..., 2:3].reshape(R * M, 1)
 
-        xy = flat_pts[:, :2]  # (B, 2)
-        z = flat_pts[:, 2:3]  # (B, 1)
+        # Query q_i(x_m, y_m) and sample key k_i(z_m): shape (N, R*M, d_qk)
+        q = self.q_net(xy)
+        k_sample = self.k_net(z)
 
-        # Evaluate q_i(x, y) and k_i(z) for all N primitives: shape (N, R, M, d_qk)
-        q = self.q_net(xy).reshape(self.num_primitives, R, M, self.d_qk)
-        k = self.k_net(z).reshape(self.num_primitives, R, M, self.d_qk)
+        k_grid = self.k_net(self.z_grid) # (N, K, d_qk)
 
         if self.mode == "exact":
-            # Dot product q(x,y)^T k(z_m) at each sample, softmax over M
-            logits = torch.sum(q * k, dim=-1)  # (N, R, M)
-            p_z = torch.softmax(logits, dim=-1)
-        else:
-            # Performer positive random features
-            phi_q = self._favor_plus_features(q.reshape(self.num_primitives, B, self.d_qk))
-            phi_k = self._favor_plus_features(k.reshape(self.num_primitives, B, self.d_qk))
+            num_logits = (q * k_sample).sum(dim=-1)
+            denom_logits = torch.bmm(q, k_grid.transpose(1, 2))
+            max_logit = denom_logits.max(dim=-1, keepdim=True).values
+            num = torch.exp(num_logits - max_logit.squeeze(-1))
+            denom = torch.exp(denom_logits - max_logit).sum(dim=-1) + 1e-8
+            p_z = (num / denom).reshape(self.num_primitives, R, M)
 
-            phi_q = phi_q.reshape(self.num_primitives, R, M, self.num_features)
-            phi_k = phi_k.reshape(self.num_primitives, R, M, self.num_features)
+        elif self.mode == "performer":
+            phi_q = self._positive_random_features(q)            # (N, R*M, F)
+            phi_k_sample = self._positive_random_features(k_sample)  # (N, R*M, F)
+            phi_k_grid = self._positive_random_features(k_grid)  # (N, K, F)
 
-            # Numerator: phi(q)^T phi(k_m) -> (N, R, M)
-            numer = torch.sum(phi_q * phi_k, dim=-1)
-
-            # Denominator: phi(q)^T * sum_j phi(k_j) -> (N, R, M)
-            s_i = torch.sum(phi_k, dim=2, keepdim=True)  # (N, R, 1, r)
-            denom = torch.sum(phi_q * s_i, dim=-1) + 1e-8  # (N, R, M)
-            p_z = numer / denom
+            num = (phi_q * phi_k_sample).sum(dim=-1)             # (N, R*M)
+            k_grid_sum = phi_k_grid.sum(dim=1)                   # (N, F)
+            denom = (phi_q * k_grid_sum.unsqueeze(1)).sum(dim=-1) + 1e-8
+            p_z = (num / denom).reshape(self.num_primitives, R, M)
 
         return p_z
