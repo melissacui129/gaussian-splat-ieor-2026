@@ -17,10 +17,11 @@ class BatchedMLP(nn.Module):
         x: (B, in_dim) where B is total queried coordinates (e.g., R * M)
         returns: (N, B, out_dim)
         """
-        h = torch.einsum("bi,nih->nbh", x, self.w1) + self.b1 # (B, in_dim) x (N, in_dim, hidden_dim) -> (N, B, hidden_dim)
-        h = torch.tanh(h)
-        out = torch.einsum("nbh,nho->nbo", h, self.w2) + self.b2 # (N, B, hidden_dim) x (N, hidden_dim, out_dim) -> (N, B, out_dim)
-        return out
+        with torch.amp.autocast("cuda", dtype=torch.float16):
+            h = torch.einsum("bi,nih->nbh", x, self.w1) + self.b1
+            h = torch.tanh(h)
+            out = torch.einsum("nbh,nho->nbo", h, self.w2) + self.b2
+        return out.float()
 
 class Attention(nn.Module):
     """
